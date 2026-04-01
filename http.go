@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 type HttpHandler struct {
@@ -18,14 +19,21 @@ func NewHttpHandler(log *FilterHandler) *HttpHandler {
 
 	h := &HttpHandler{log: log, mux: mux}
 
-	mux.HandleFunc("level", h.handleLogLevel)
-	mux.HandleFunc("enable", h.handleLogEnable)
-	mux.HandleFunc("trace-id", h.handleTraceId)
+	mux.HandleFunc("/level", h.handleLogLevel)
+	mux.HandleFunc("/enable", h.handleLogEnable)
+	mux.HandleFunc("/trace-id", h.handleTraceId)
 
 	return h
 }
 
 func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL != nil && r.URL.Path != "" && !strings.HasPrefix(r.URL.Path, "/") {
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/" + r.URL.Path
+		h.mux.ServeHTTP(w, r2)
+		return
+	}
+
 	h.mux.ServeHTTP(w, r)
 }
 

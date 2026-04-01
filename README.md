@@ -159,7 +159,7 @@ for entry := range entryCh {
 Expose `FilterHandler` controls over HTTP for runtime log management. Mount it as a sub-handler on your existing mux:
 
 ```go
-mux.Handle("/debug/log/", http.StripPrefix("/debug/log", handler.HttpHandler()))
+mux.Handle("/debug/log/", http.StripPrefix("/debug/log/", handler.HttpHandler()))
 ```
 
 ### Endpoints
