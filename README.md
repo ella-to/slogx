@@ -19,7 +19,13 @@
 ## Installation
 
 ```bash
-go get ella.to/slogx
+go get ella.to/slogx@v0.0.1
+```
+
+for command line tools
+
+```bash
+go install ella.to/slogx/cmd/slogx@v0.0.1
 ```
 
 ## FilterHandler
