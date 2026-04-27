@@ -17,8 +17,8 @@ type FilterHandler struct {
 	matcher            *pathMatcher
 	disabled           bool
 	exclusiveFiltering bool // if true, only logs from paths with explicit rules are shown
-	traceIdKey         any
-	filterTraceId      string // if set, only logs with this trace ID will be shown
+	traceIDKey         any
+	filterTraceID      string // if set, only logs with this trace ID will be shown
 	mu                 sync.RWMutex
 }
 
@@ -104,37 +104,37 @@ func (h *FilterHandler) SetExclusiveFiltering(exclusive bool) {
 	h.exclusiveFiltering = exclusive
 }
 
-// SetTraceIdKey configures the key used to extract trace ID from context
-func (h *FilterHandler) SetTraceIdKey(key any) {
+// SetTraceIDKey configures the key used to extract trace ID from context.
+func (h *FilterHandler) SetTraceIDKey(key any) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.traceIdKey = key
+	h.traceIDKey = key
 }
 
-// SetFilterTraceId filters logs to only show those with the specified trace ID
-// If set to empty string, disables trace ID filtering
-func (h *FilterHandler) SetFilterTraceId(traceId string) {
+// SetFilterTraceID filters logs to only show those with the specified trace ID.
+// Pass an empty string to disable trace ID filtering.
+func (h *FilterHandler) SetFilterTraceID(traceID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.filterTraceId = traceId
+	h.filterTraceID = traceID
 }
 
-// GetFilterTraceId returns the current trace ID filter
-func (h *FilterHandler) GetFilterTraceId() string {
+// GetFilterTraceID returns the current trace ID filter.
+func (h *FilterHandler) GetFilterTraceID() string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.filterTraceId
+	return h.filterTraceID
 }
 
-// GetConfig returns the current configuration (for debugging/inspection)
-func (h *FilterHandler) GetConfig() (defaultLevel slog.Level, rules map[string]slog.Level, disabled bool, exclusiveFiltering bool, traceIdKey any, filterTraceId string) {
+// GetConfig returns the current configuration (for debugging/inspection).
+func (h *FilterHandler) GetConfig() (defaultLevel slog.Level, rules map[string]slog.Level, disabled bool, exclusiveFiltering bool, traceIDKey any, filterTraceID string) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	rules = make(map[string]slog.Level, len(h.matcher.rules))
 	for _, r := range h.matcher.rules {
 		rules[r.prefix] = r.level
 	}
-	return h.defaultLevel, rules, h.disabled, h.exclusiveFiltering, h.traceIdKey, h.filterTraceId
+	return h.defaultLevel, rules, h.disabled, h.exclusiveFiltering, h.traceIDKey, h.filterTraceID
 }
 
 func (h *FilterHandler) HttpHandler() http.Handler {
@@ -199,8 +199,8 @@ func (h *FilterHandler) Handle(ctx context.Context, r slog.Record) error {
 	}
 
 	// Check if trace ID filtering is enabled and this log matches
-	if h.filterTraceId != "" {
-		if !h.logContainsTraceId(ctx, r) {
+	if h.filterTraceID != "" {
+		if !h.logContainsTraceID(ctx, r) {
 			return nil
 		}
 	}
@@ -208,22 +208,18 @@ func (h *FilterHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.inner.Handle(ctx, r)
 }
 
-// logContainsTraceId checks if the log record contains the filter trace ID
-func (h *FilterHandler) logContainsTraceId(ctx context.Context, r slog.Record) bool {
-	// Extract trace ID from context if key is set
-	if h.traceIdKey != nil && ctx != nil {
-		if traceId := ctx.Value(h.traceIdKey); traceId != nil {
-			if traceIdStr, ok := traceId.(string); ok && traceIdStr == h.filterTraceId {
+func (h *FilterHandler) logContainsTraceID(ctx context.Context, r slog.Record) bool {
+	if h.traceIDKey != nil && ctx != nil {
+		if val := ctx.Value(h.traceIDKey); val != nil {
+			if s, ok := val.(string); ok && s == h.filterTraceID {
 				return true
 			}
 		}
 	}
 
-	// Check if trace ID is in the record attributes
 	var found bool
 	r.Attrs(func(attr slog.Attr) bool {
-		// Check if this attribute matches the trace ID
-		if h.compareAttrToTraceId(attr) {
+		if h.attrMatchesTraceID(attr) {
 			found = true
 			return false
 		}
@@ -232,26 +228,16 @@ func (h *FilterHandler) logContainsTraceId(ctx context.Context, r slog.Record) b
 	return found
 }
 
-// compareAttrToTraceId recursively checks if an attribute contains the filter trace ID
-func (h *FilterHandler) compareAttrToTraceId(attr slog.Attr) bool {
-	// If the value is a group, recursively check group members
+func (h *FilterHandler) attrMatchesTraceID(attr slog.Attr) bool {
 	if attr.Value.Kind() == slog.KindGroup {
-		for _, groupAttr := range attr.Value.Group() {
-			if h.compareAttrToTraceId(groupAttr) {
+		for _, ga := range attr.Value.Group() {
+			if h.attrMatchesTraceID(ga) {
 				return true
 			}
 		}
 		return false
 	}
-
-	// Check if this attribute's value matches the filter trace ID
-	if attr.Value.Kind() == slog.KindString {
-		if attr.Value.String() == h.filterTraceId {
-			return true
-		}
-	}
-
-	return false
+	return attr.Value.Kind() == slog.KindString && attr.Value.String() == h.filterTraceID
 }
 
 func (h *FilterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
@@ -264,8 +250,8 @@ func (h *FilterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		matcher:            h.matcher,
 		disabled:           h.disabled,
 		exclusiveFiltering: h.exclusiveFiltering,
-		traceIdKey:         h.traceIdKey,
-		filterTraceId:      h.filterTraceId,
+		traceIDKey:         h.traceIDKey,
+		filterTraceID:      h.filterTraceID,
 	}
 }
 
@@ -279,8 +265,8 @@ func (h *FilterHandler) WithGroup(name string) slog.Handler {
 		matcher:            h.matcher,
 		disabled:           h.disabled,
 		exclusiveFiltering: h.exclusiveFiltering,
-		traceIdKey:         h.traceIdKey,
-		filterTraceId:      h.filterTraceId,
+		traceIDKey:         h.traceIDKey,
+		filterTraceID:      h.filterTraceID,
 	}
 }
 

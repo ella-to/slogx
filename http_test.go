@@ -83,7 +83,7 @@ func TestNewHttpHandler_TraceIDRouteWithStripPrefix(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, setRes.Code)
 	}
 
-	if got := handler.GetFilterTraceId(); got != "abc-123" {
+	if got := handler.GetFilterTraceID(); got != "abc-123" {
 		t.Fatalf("expected filter trace id abc-123, got %q", got)
 	}
 
@@ -112,7 +112,94 @@ func TestNewHttpHandler_TraceIDRouteWithStripPrefix(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, clearRes.Code)
 	}
 
-	if got := handler.GetFilterTraceId(); got != "" {
+	if got := handler.GetFilterTraceID(); got != "" {
 		t.Fatalf("expected empty filter trace id, got %q", got)
+	}
+}
+
+func TestTraceIDMiddleware_QueryString(t *testing.T) {
+	type ctxKey struct{}
+	key := ctxKey{}
+
+	m := NewTraceIDMiddleware(key, WithQueryString("trace-id"))
+
+	var captured string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v, ok := r.Context().Value(key).(string); ok {
+			captured = v
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/?trace-id=abc-123", nil)
+	m.Handler(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if captured != "abc-123" {
+		t.Fatalf("expected trace id abc-123, got %q", captured)
+	}
+}
+
+func TestTraceIDMiddleware_Header(t *testing.T) {
+	type ctxKey struct{}
+	key := ctxKey{}
+
+	m := NewTraceIDMiddleware(key, WithHeaderKey("X-Trace-ID"))
+
+	var captured string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v, ok := r.Context().Value(key).(string); ok {
+			captured = v
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Trace-ID", "header-trace-456")
+	m.Handler(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if captured != "header-trace-456" {
+		t.Fatalf("expected trace id header-trace-456, got %q", captured)
+	}
+}
+
+func TestTraceIDMiddleware_QueryPriorityOverHeader(t *testing.T) {
+	type ctxKey struct{}
+	key := ctxKey{}
+
+	m := NewTraceIDMiddleware(key, WithQueryString("tid"), WithHeaderKey("X-Trace-ID"))
+
+	var captured string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v, ok := r.Context().Value(key).(string); ok {
+			captured = v
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/?tid=from-query", nil)
+	req.Header.Set("X-Trace-ID", "from-header")
+	m.Handler(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if captured != "from-query" {
+		t.Fatalf("expected query value from-query, got %q", captured)
+	}
+}
+
+func TestTraceIDMiddleware_NoTraceID(t *testing.T) {
+	type ctxKey struct{}
+	key := ctxKey{}
+
+	m := NewTraceIDMiddleware(key, WithQueryString("tid"), WithHeaderKey("X-Trace-ID"))
+
+	passed := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		passed = true
+		if v := r.Context().Value(key); v != nil {
+			t.Errorf("expected no trace id in context, got %v", v)
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	m.Handler(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if !passed {
+		t.Fatal("next handler was not called")
 	}
 }

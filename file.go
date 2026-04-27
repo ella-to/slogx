@@ -661,6 +661,59 @@ func ReadLatestSession(baseDir string, pageSize int) (*LogReader, error) {
 	return NewLogReader(sessions[0].Path, pageSize)
 }
 
+// NewDirLogReader creates a LogReader that reads all log files across every
+// session in baseDir, ordered chronologically (oldest session and file first).
+// This lets you point at the root log folder and iterate all records without
+// having to select a session manually.
+func NewDirLogReader(baseDir string, pageSize int) (*LogReader, error) {
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+
+	sessions, err := ListSessions(baseDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 {
+		return nil, fmt.Errorf("no sessions found in: %s", baseDir)
+	}
+
+	// ListSessions returns newest-first; reverse to oldest-first.
+	var allFiles []string
+	for i := len(sessions) - 1; i >= 0; i-- {
+		pattern := filepath.Join(sessions[i].Path, "*.log")
+		files, err := filepath.Glob(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list log files in %s: %w", sessions[i].Path, err)
+		}
+		sort.Strings(files)
+		allFiles = append(allFiles, files...)
+	}
+
+	if len(allFiles) == 0 {
+		return nil, fmt.Errorf("no log files found in: %s", baseDir)
+	}
+
+	return &LogReader{
+		sessionPath: baseDir,
+		files:       allFiles,
+		pageSize:    pageSize,
+	}, nil
+}
+
+// NewDirLogIterator creates a LogIterator that reads all log files across
+// every session in baseDir, ordered chronologically (oldest session first).
+func NewDirLogIterator(baseDir string) (*LogIterator, error) {
+	reader, err := NewDirLogReader(baseDir, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &LogIterator{
+		reader:      reader,
+		currentFile: -1,
+	}, nil
+}
+
 // CountLogs counts the total number of log entries in a session.
 // This scans all files and may be slow for large sessions.
 func CountLogs(sessionPath string) (int64, error) {

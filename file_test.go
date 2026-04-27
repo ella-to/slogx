@@ -675,3 +675,81 @@ func TestParseFileIndex(t *testing.T) {
 		}
 	}
 }
+
+func TestNewDirLogReader(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write to two separate sessions.
+	h1, err := NewFileHandler(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create first handler: %v", err)
+	}
+	slog.New(h1).Info("session one")
+	h1.Flush()
+	h1.Close()
+
+	// Ensure a different second-granularity timestamp.
+	time.Sleep(1100 * time.Millisecond)
+
+	h2, err := NewFileHandler(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create second handler: %v", err)
+	}
+	slog.New(h2).Info("session two")
+	h2.Flush()
+	h2.Close()
+
+	reader, err := NewDirLogReader(tmpDir, 100)
+	if err != nil {
+		t.Fatalf("failed to create dir reader: %v", err)
+	}
+
+	entries, err := reader.ReadAll()
+	if err != nil {
+		t.Fatalf("failed to read all: %v", err)
+	}
+
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries across sessions, got %d", len(entries))
+	}
+	if entries[0].Message != "session one" {
+		t.Errorf("expected first entry from session one, got %q", entries[0].Message)
+	}
+	if entries[1].Message != "session two" {
+		t.Errorf("expected second entry from session two, got %q", entries[1].Message)
+	}
+}
+
+func TestNewDirLogIterator(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	h1, _ := NewFileHandler(tmpDir)
+	slog.New(h1).Info("iter session one")
+	h1.Flush()
+	h1.Close()
+
+	time.Sleep(1100 * time.Millisecond)
+
+	h2, _ := NewFileHandler(tmpDir)
+	slog.New(h2).Info("iter session two")
+	h2.Flush()
+	h2.Close()
+
+	iter, err := NewDirLogIterator(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create dir iterator: %v", err)
+	}
+	defer iter.Close()
+
+	var msgs []string
+	for entry, ok := iter.Next(); ok; entry, ok = iter.Next() {
+		msgs = append(msgs, entry.Message)
+	}
+
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	if msgs[0] != "iter session one" || msgs[1] != "iter session two" {
+		t.Errorf("unexpected messages: %v", msgs)
+	}
+}
