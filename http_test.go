@@ -1,205 +1,154 @@
 package slogx
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-func newMountedDebugLogMux(t *testing.T) (*FilterHandler, *http.ServeMux) {
-	t.Helper()
+func TestMiddlewareTraceIDPrecedence(t *testing.T) {
+	Setup(Output(io.Discard))
+	defer activeHandler.Store(nil)
 
-	handler := NewFilterHandler(slog.NewJSONHandler(io.Discard, nil))
-	mux := http.NewServeMux()
-	mux.Handle("/debug/log/", http.StripPrefix("/debug/log/", handler.HttpHandler()))
+	var gotHeader, gotQuery, gotGenerated string
 
-	return handler, mux
-}
-
-func TestNewHttpHandler_LevelRouteWithStripPrefix(t *testing.T) {
-	handler, mux := newMountedDebugLogMux(t)
-
-	setReq := httptest.NewRequest(http.MethodPost, "/debug/log/level?path=myapp/db&level=DEBUG", nil)
-	setRes := httptest.NewRecorder()
-	mux.ServeHTTP(setRes, setReq)
-
-	if setRes.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, setRes.Code)
-	}
-
-	getReq := httptest.NewRequest(http.MethodGet, "/debug/log/level", nil)
-	getRes := httptest.NewRecorder()
-	mux.ServeHTTP(getRes, getReq)
-
-	if getRes.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, getRes.Code)
-	}
-
-	var body struct {
-		Rules map[string]string `json:"rules"`
-	}
-	if err := json.NewDecoder(getRes.Body).Decode(&body); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if got := body.Rules["myapp/db"]; got != "DEBUG" {
-		t.Fatalf("expected myapp/db level DEBUG, got %q", got)
-	}
-
-	_, rules, _, _, _, _ := handler.GetConfig()
-	if got := rules["myapp/db"]; got != slog.LevelDebug {
-		t.Fatalf("expected internal rule level %v, got %v", slog.LevelDebug, got)
-	}
-}
-
-func TestNewHttpHandler_EnableRouteWithStripPrefix(t *testing.T) {
-	handler, mux := newMountedDebugLogMux(t)
-
-	req := httptest.NewRequest(http.MethodPost, "/debug/log/enable?enable=false", nil)
-	res := httptest.NewRecorder()
-	mux.ServeHTTP(res, req)
-
-	if res.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, res.Code)
-	}
-
-	_, _, disabled, _, _, _ := handler.GetConfig()
-	if !disabled {
-		t.Fatal("expected handler to be disabled")
-	}
-}
-
-func TestNewHttpHandler_TraceIDRouteWithStripPrefix(t *testing.T) {
-	handler, mux := newMountedDebugLogMux(t)
-
-	setReq := httptest.NewRequest(http.MethodPost, "/debug/log/trace-id?trace-id=abc-123", nil)
-	setRes := httptest.NewRecorder()
-	mux.ServeHTTP(setRes, setReq)
-
-	if setRes.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, setRes.Code)
-	}
-
-	if got := handler.GetFilterTraceID(); got != "abc-123" {
-		t.Fatalf("expected filter trace id abc-123, got %q", got)
-	}
-
-	getReq := httptest.NewRequest(http.MethodGet, "/debug/log/trace-id", nil)
-	getRes := httptest.NewRecorder()
-	mux.ServeHTTP(getRes, getReq)
-
-	if getRes.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, getRes.Code)
-	}
-
-	var body map[string]string
-	if err := json.NewDecoder(getRes.Body).Decode(&body); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if got := body["trace_id"]; got != "abc-123" {
-		t.Fatalf("expected trace_id abc-123, got %q", got)
-	}
-
-	clearReq := httptest.NewRequest(http.MethodDelete, "/debug/log/trace-id", nil)
-	clearRes := httptest.NewRecorder()
-	mux.ServeHTTP(clearRes, clearReq)
-
-	if clearRes.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, clearRes.Code)
-	}
-
-	if got := handler.GetFilterTraceID(); got != "" {
-		t.Fatalf("expected empty filter trace id, got %q", got)
-	}
-}
-
-func TestTraceIDMiddleware_QueryString(t *testing.T) {
-	type ctxKey struct{}
-	key := ctxKey{}
-
-	m := NewTraceIDMiddleware(key, WithQueryString("trace-id"))
-
-	var captured string
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if v, ok := r.Context().Value(key).(string); ok {
-			captured = v
+	h := Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/h":
+			gotHeader = TraceID(r.Context())
+		case "/q":
+			gotQuery = TraceID(r.Context())
+		case "/g":
+			gotGenerated = TraceID(r.Context())
 		}
-	})
+	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/?trace-id=abc-123", nil)
-	m.Handler(next).ServeHTTP(httptest.NewRecorder(), req)
+	// header only
+	r := httptest.NewRequest("GET", "/h", nil)
+	r.Header.Set(HeaderTraceID, "from-header")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if gotHeader != "from-header" {
+		t.Errorf("header trace id: got %q want %q", gotHeader, "from-header")
+	}
+	if w.Header().Get(HeaderTraceID) != "from-header" {
+		t.Errorf("response header not echoed")
+	}
 
-	if captured != "abc-123" {
-		t.Fatalf("expected trace id abc-123, got %q", captured)
+	// query overrides header
+	r = httptest.NewRequest("GET", "/q?log_trace_id=from-query", nil)
+	r.Header.Set(HeaderTraceID, "from-header")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if gotQuery != "from-query" {
+		t.Errorf("query override failed: got %q", gotQuery)
+	}
+
+	// neither: generated
+	r = httptest.NewRequest("GET", "/g", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if gotGenerated == "" {
+		t.Errorf("expected generated trace id")
+	}
+	if w.Header().Get(HeaderTraceID) != gotGenerated {
+		t.Errorf("response header mismatch")
 	}
 }
 
-func TestTraceIDMiddleware_Header(t *testing.T) {
-	type ctxKey struct{}
-	key := ctxKey{}
+func TestHttpHandlerLevels(t *testing.T) {
+	Setup(Output(io.Discard))
+	defer activeHandler.Store(nil)
 
-	m := NewTraceIDMiddleware(key, WithHeaderKey("X-Trace-ID"))
+	mux := HttpHandler()
 
-	var captured string
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if v, ok := r.Context().Value(key).(string); ok {
-			captured = v
+	// GET initial state
+	r := httptest.NewRequest("GET", "/levels", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("GET /levels: status %d", w.Code)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["global"] != "INFO" {
+		t.Fatalf("initial global: %v", got["global"])
+	}
+
+	// PATCH: set global OFF and opt a package in at DEBUG
+	body := bytes.NewBufferString(`{"global":"OFF","set":{"ella.to/app":"DEBUG"}}`)
+	r = httptest.NewRequest("PATCH", "/levels", body)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("PATCH /levels: status %d body %s", w.Code, w.Body.String())
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got["global"] != "OFF" {
+		t.Fatalf("global not updated: %v", got["global"])
+	}
+	pkgs, _ := got["packages"].([]any)
+	found := false
+	for _, p := range pkgs {
+		m := p.(map[string]any)
+		if m["package"] == "ella.to/app" && m["level"] == "DEBUG" {
+			found = true
 		}
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Trace-ID", "header-trace-456")
-	m.Handler(next).ServeHTTP(httptest.NewRecorder(), req)
-
-	if captured != "header-trace-456" {
-		t.Fatalf("expected trace id header-trace-456, got %q", captured)
 	}
-}
+	if !found {
+		t.Fatalf("package override not applied: %v", pkgs)
+	}
 
-func TestTraceIDMiddleware_QueryPriorityOverHeader(t *testing.T) {
-	type ctxKey struct{}
-	key := ctxKey{}
-
-	m := NewTraceIDMiddleware(key, WithQueryString("tid"), WithHeaderKey("X-Trace-ID"))
-
-	var captured string
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if v, ok := r.Context().Value(key).(string); ok {
-			captured = v
+	// PATCH: unset the package
+	body = bytes.NewBufferString(`{"unset":["ella.to/app"]}`)
+	r = httptest.NewRequest("PATCH", "/levels", body)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	pkgs, _ = got["packages"].([]any)
+	for _, p := range pkgs {
+		m := p.(map[string]any)
+		if m["package"] == "ella.to/app" {
+			t.Fatalf("package still present after unset: %v", pkgs)
 		}
-	})
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/?tid=from-query", nil)
-	req.Header.Set("X-Trace-ID", "from-header")
-	m.Handler(next).ServeHTTP(httptest.NewRecorder(), req)
-
-	if captured != "from-query" {
-		t.Fatalf("expected query value from-query, got %q", captured)
+	// PATCH with an invalid level name yields 400
+	body = bytes.NewBufferString(`{"global":"CHATTY"}`)
+	r = httptest.NewRequest("PATCH", "/levels", body)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 400 {
+		t.Fatalf("invalid level should 400, got %d", w.Code)
 	}
 }
 
-func TestTraceIDMiddleware_NoTraceID(t *testing.T) {
-	type ctxKey struct{}
-	key := ctxKey{}
+func TestHttpHandlerLogsByTraceID(t *testing.T) {
+	Setup(Output(io.Discard))
+	defer activeHandler.Store(nil)
 
-	m := NewTraceIDMiddleware(key, WithQueryString("tid"), WithHeaderKey("X-Trace-ID"))
+	ctx := Context(context.Background())
+	traceID := TraceID(ctx)
+	slog.InfoContext(ctx, "hello world")
 
-	passed := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		passed = true
-		if v := r.Context().Value(key); v != nil {
-			t.Errorf("expected no trace id in context, got %v", v)
-		}
-	})
+	mux := HttpHandler()
+	r := httptest.NewRequest("GET", "/logs?traceId="+traceID, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	m.Handler(next).ServeHTTP(httptest.NewRecorder(), req)
-
-	if !passed {
-		t.Fatal("next handler was not called")
+	if w.Code != 200 {
+		t.Fatalf("status %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "hello world") {
+		t.Fatalf("log missing: %s", w.Body.String())
 	}
 }
+

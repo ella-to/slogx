@@ -1,339 +1,283 @@
+// Package slogx extends the standard log/slog package with:
+//   - Hierarchical trace/span context propagation via Context(ctx).
+//   - Static and dynamic include/exclude filtering by Go package import path.
+//   - A pluggable Store for in-process log retention.
+//   - An HTTP admin + UI handler for live debugging.
+//
+// Typical setup:
+//
+//	func main() {
+//	    slogx.Setup(
+//	        slogx.Includes("ella.to/example"),
+//	        slogx.Excludes("example.com/noise"),
+//	    )
+//	    // ...
+//	}
+//
+// Inside any function that accepts a context, the caller establishes a new
+// span by shadowing ctx:
+//
+//	func Sum(ctx context.Context, xs ...int) int {
+//	    ctx = slogx.Context(ctx)
+//	    slog.InfoContext(ctx, "summing", "n", len(xs))
+//	    // ...
+//	}
 package slogx
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base32"
+	"io"
 	"log/slog"
-	"net/http"
-	"runtime"
-	"sort"
+	"os"
 	"strings"
-	"sync"
+	"sync/atomic"
+	"time"
 )
 
-type FilterHandler struct {
-	inner              slog.Handler
-	defaultLevel       slog.Level
-	minLevel           slog.Level // cached minimum level for Enabled() fast path
-	matcher            *pathMatcher
-	disabled           bool
-	exclusiveFiltering bool // if true, only logs from paths with explicit rules are shown
-	traceIDKey         any
-	filterTraceID      string // if set, only logs with this trace ID will be shown
-	mu                 sync.RWMutex
+// Format selects the serialization used for the stdout/file sink.
+type Format int
+
+const (
+	FormatJSON Format = iota
+	FormatText
+)
+
+// Attribute keys injected into every record.
+const (
+	AttrTraceID   = "_traceId"
+	AttrParentID  = "_parentId"
+	AttrSpanPath  = "_spanPath"
+	AttrGoroutine = "_goroutine"
+)
+
+// Default configuration values.
+const (
+	DefaultRingBufferSize = 10_000
+)
+
+// Option configures Setup.
+type Option func(*config)
+
+type config struct {
+	globalLevel    slog.Level
+	packageLevels  []packageLevel
+	output         io.Writer
+	format         Format
+	store          Store
+	ringBufferSize int
+	addSource      bool
 }
 
-type FilterHandlerOpt func(*FilterHandler)
+// GlobalLevel sets the minimum level for records from packages that have no
+// explicit override. Use LevelOff to turn logging off by default (handy when
+// you want to opt-in specific packages with PackageLevel).
+func GlobalLevel(l slog.Level) Option {
+	return func(c *config) { c.globalLevel = l }
+}
 
-// WithDefaultLevel sets the default log level for all packages
-func WithDefaultLevel(level slog.Level) FilterHandlerOpt {
-	return func(h *FilterHandler) {
-		h.defaultLevel = level
-		h.recalcMinLevel()
+// Level is an alias for GlobalLevel. Kept for ergonomic parity with slog.
+func Level(l slog.Level) Option {
+	return GlobalLevel(l)
+}
+
+// PackageLevel sets a per-package (prefix) minimum level that overrides the
+// global level. Longest matching prefix wins. Pass LevelOff to silence a
+// package entirely.
+//
+//	slogx.PackageLevel("ella.to/noisy", slogx.LevelOff)
+//	slogx.PackageLevel("ella.to/app/api", slog.LevelDebug)
+func PackageLevel(pattern string, l slog.Level) Option {
+	return func(c *config) {
+		c.packageLevels = append(c.packageLevels, packageLevel{Pattern: pattern, Level: l})
 	}
 }
 
-// WithLogLevel sets the log level for a specific package path
-func WithLogLevel(path string, level slog.Level) FilterHandlerOpt {
-	return func(h *FilterHandler) {
-		h.matcher.add(path, level)
-		h.recalcMinLevel()
+// Output sets the destination for the stdout-style sink. Default: os.Stdout.
+// Pass io.Discard to disable the sink entirely.
+func Output(w io.Writer) Option {
+	return func(c *config) { c.output = w }
+}
+
+// WithFormat selects JSON or text output for the stdout-style sink.
+func WithFormat(f Format) Option {
+	return func(c *config) { c.format = f }
+}
+
+// WithStore installs a custom Store. Default is an in-memory ring buffer.
+func WithStore(s Store) Option {
+	return func(c *config) { c.store = s }
+}
+
+// RingBufferSize sets the capacity of the default ring buffer store.
+// Ignored if WithStore was also provided.
+func RingBufferSize(n int) Option {
+	return func(c *config) {
+		if n > 0 {
+			c.ringBufferSize = n
+		}
 	}
 }
 
-// WithExclusiveFiltering enables exclusive filtering mode.
-// When enabled, only logs from paths that have explicit rules (set via WithLogLevel)
-// will be shown. All other logs will be filtered out regardless of their level.
-func WithExclusiveFiltering() FilterHandlerOpt {
-	return func(h *FilterHandler) {
-		h.exclusiveFiltering = true
-	}
+// AddSource controls whether the underlying slog sink includes source info.
+func AddSource(v bool) Option {
+	return func(c *config) { c.addSource = v }
 }
 
-func NewFilterHandler(inner slog.Handler, opts ...FilterHandlerOpt) *FilterHandler {
-	h := &FilterHandler{
-		inner:              inner,
-		defaultLevel:       slog.LevelInfo,
-		minLevel:           slog.LevelInfo,
-		matcher:            newPathMatcher(),
-		disabled:           false,
-		exclusiveFiltering: false,
+// activeHandler is the handler wired in by the most recent Setup call.
+// It is kept so HttpHandler() and Middleware() can reach the shared filter/store.
+var activeHandler atomic.Pointer[Handler]
+
+// Setup installs slogx as the default slog logger and returns the installed
+// Handler. It is safe to call Setup more than once (the previous handler is
+// replaced).
+func Setup(opts ...Option) *Handler {
+	cfg := &config{
+		output:         os.Stdout,
+		format:         FormatJSON,
+		globalLevel:    slog.LevelInfo,
+		ringBufferSize: DefaultRingBufferSize,
+		addSource:      true,
 	}
-	for _, opt := range opts {
-		opt(h)
+	for _, o := range opts {
+		o(cfg)
 	}
+	if cfg.store == nil {
+		cfg.store = newRingStore(cfg.ringBufferSize)
+	}
+
+	h := newHandler(cfg)
+	activeHandler.Store(h)
+	slog.SetDefault(slog.New(h))
 	return h
 }
 
-// --- Runtime Configuration Methods ---
-
-// SetEnabled enables or disables all logging
-func (h *FilterHandler) SetEnabled(enabled bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.disabled = !enabled
+func getActive() *Handler {
+	return activeHandler.Load()
 }
 
-// SetDefaultLevel changes the default log level at runtime
-func (h *FilterHandler) SetDefaultLevel(level slog.Level) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.defaultLevel = level
-	h.recalcMinLevelLocked()
-}
+type ctxKey int
 
-// SetLogLevel sets or updates the log level for a specific path at runtime
-func (h *FilterHandler) SetLogLevel(path string, level slog.Level) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.matcher.set(path, level)
-	h.recalcMinLevelLocked()
-}
+const (
+	traceIDKey ctxKey = iota
+	spanIDKey
+	spanPathKey
+	birthGIDKey   // goroutine id recorded at the span's creation
+	concurrentKey // true if this span (or any ancestor) was created on a different goroutine than its parent
+)
 
-// RemoveLogLevel removes a path-specific log level, falling back to default
-func (h *FilterHandler) RemoveLogLevel(path string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.matcher.remove(path)
-	h.recalcMinLevelLocked()
-}
-
-// SetExclusiveFiltering enables or disables exclusive filtering mode at runtime
-func (h *FilterHandler) SetExclusiveFiltering(exclusive bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.exclusiveFiltering = exclusive
-}
-
-// SetTraceIDKey configures the key used to extract trace ID from context.
-func (h *FilterHandler) SetTraceIDKey(key any) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.traceIDKey = key
-}
-
-// SetFilterTraceID filters logs to only show those with the specified trace ID.
-// Pass an empty string to disable trace ID filtering.
-func (h *FilterHandler) SetFilterTraceID(traceID string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.filterTraceID = traceID
-}
-
-// GetFilterTraceID returns the current trace ID filter.
-func (h *FilterHandler) GetFilterTraceID() string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.filterTraceID
-}
-
-// GetConfig returns the current configuration (for debugging/inspection).
-func (h *FilterHandler) GetConfig() (defaultLevel slog.Level, rules map[string]slog.Level, disabled bool, exclusiveFiltering bool, traceIDKey any, filterTraceID string) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	rules = make(map[string]slog.Level, len(h.matcher.rules))
-	for _, r := range h.matcher.rules {
-		rules[r.prefix] = r.level
+// Context returns a derived context that starts a new span. On the first call
+// (no trace-id in ctx) a new trace-id is also generated. The returned context
+// carries:
+//
+//   - trace id (stable for the whole trace),
+//   - current span id (this new span),
+//   - span path (slash-joined ancestor chain, including this span),
+//   - goroutine-concurrency flag (true if this span was created on a
+//     different goroutine than its parent, or inherited from such a span).
+//
+// Use at the start of any function that accepts ctx:
+//
+//	ctx = slogx.Context(ctx)
+func Context(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return h.defaultLevel, rules, h.disabled, h.exclusiveFiltering, h.traceIDKey, h.filterTraceID
-}
-
-func (h *FilterHandler) HttpHandler() http.Handler {
-	return NewHttpHandler(h)
-}
-
-func (h *FilterHandler) recalcMinLevelLocked() {
-	h.minLevel = h.defaultLevel
-	for _, level := range h.matcher.levels() {
-		if level < h.minLevel {
-			h.minLevel = level
-		}
+	traceID, _ := ctx.Value(traceIDKey).(string)
+	if traceID == "" {
+		traceID = newID()
+		ctx = context.WithValue(ctx, traceIDKey, traceID)
 	}
-}
 
-func (h *FilterHandler) recalcMinLevel() {
-	h.minLevel = h.defaultLevel
-	for _, level := range h.matcher.levels() {
-		if level < h.minLevel {
-			h.minLevel = level
-		}
+	spanID := newID()
+
+	prevPath, _ := ctx.Value(spanPathKey).(string)
+	var newPath string
+	if prevPath == "" {
+		newPath = spanID
+	} else {
+		newPath = prevPath + "/" + spanID
 	}
+
+	curGID := goid()
+	concurrent, _ := ctx.Value(concurrentKey).(bool)
+	if parentGID, ok := ctx.Value(birthGIDKey).(int64); ok && parentGID != curGID {
+		concurrent = true
+	}
+
+	ctx = context.WithValue(ctx, spanIDKey, spanID)
+	ctx = context.WithValue(ctx, spanPathKey, newPath)
+	ctx = context.WithValue(ctx, birthGIDKey, curGID)
+	if concurrent {
+		ctx = context.WithValue(ctx, concurrentKey, true)
+	}
+	return ctx
 }
 
-func (h *FilterHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if h.disabled {
+// Concurrent reports whether ctx belongs to a span that runs on a different
+// goroutine than the span that created its parent context (i.e. it was
+// reached by crossing a `go` statement). Once set, it stays set for all
+// descendant spans.
+func Concurrent(ctx context.Context) bool {
+	if ctx == nil {
 		return false
 	}
-	return level >= h.minLevel
+	v, _ := ctx.Value(concurrentKey).(bool)
+	return v
 }
 
-func (h *FilterHandler) Handle(ctx context.Context, r slog.Record) error {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	if h.disabled {
-		return nil
+// WithTraceID seeds a trace id into ctx without starting a new span. It is
+// used by Middleware to honor inbound X-TRACE-ID headers before the root
+// Context call.
+func WithTraceID(ctx context.Context, traceID string) context.Context {
+	if traceID == "" {
+		return ctx
 	}
+	return context.WithValue(ctx, traceIDKey, traceID)
+}
 
-	effectiveLevel := h.defaultLevel
-	hasExplicitRule := false
-
-	if r.PC != 0 {
-		frames := runtime.CallersFrames([]uintptr{r.PC})
-		if frame, _ := frames.Next(); frame.PC != 0 {
-			if level, ok := h.matcher.match(frame.Function); ok {
-				effectiveLevel = level
-				hasExplicitRule = true
-			}
-		}
+// TraceID returns the current trace id from ctx, or "" if none.
+func TraceID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
 	}
+	s, _ := ctx.Value(traceIDKey).(string)
+	return s
+}
 
-	// In exclusive mode, only logs from paths with explicit rules are shown
-	if h.exclusiveFiltering && !hasExplicitRule {
-		return nil
+// SpanID returns the current (innermost) span id from ctx, or "" if none.
+func SpanID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
 	}
+	s, _ := ctx.Value(spanIDKey).(string)
+	return s
+}
 
-	if r.Level < effectiveLevel {
-		return nil
+// SpanPath returns the slash-joined ancestor chain of span ids from ctx.
+func SpanPath(ctx context.Context) string {
+	if ctx == nil {
+		return ""
 	}
-
-	// Check if trace ID filtering is enabled and this log matches
-	if h.filterTraceID != "" {
-		if !h.logContainsTraceID(ctx, r) {
-			return nil
-		}
-	}
-
-	return h.inner.Handle(ctx, r)
+	s, _ := ctx.Value(spanPathKey).(string)
+	return s
 }
 
-func (h *FilterHandler) logContainsTraceID(ctx context.Context, r slog.Record) bool {
-	if h.traceIDKey != nil && ctx != nil {
-		if val := ctx.Value(h.traceIDKey); val != nil {
-			if s, ok := val.(string); ok && s == h.filterTraceID {
-				return true
-			}
-		}
-	}
+// newID returns a lexicographically sortable 26-character ID (ULID-like:
+// 48-bit millisecond timestamp + 80 bits of randomness, Crockford-ish base32).
+// We use the standard library base32 alphabet without padding for simplicity.
+var idEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
-	var found bool
-	r.Attrs(func(attr slog.Attr) bool {
-		if h.attrMatchesTraceID(attr) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func (h *FilterHandler) attrMatchesTraceID(attr slog.Attr) bool {
-	if attr.Value.Kind() == slog.KindGroup {
-		for _, ga := range attr.Value.Group() {
-			if h.attrMatchesTraceID(ga) {
-				return true
-			}
-		}
-		return false
-	}
-	return attr.Value.Kind() == slog.KindString && attr.Value.String() == h.filterTraceID
-}
-
-func (h *FilterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return &FilterHandler{
-		inner:              h.inner.WithAttrs(attrs),
-		defaultLevel:       h.defaultLevel,
-		minLevel:           h.minLevel,
-		matcher:            h.matcher,
-		disabled:           h.disabled,
-		exclusiveFiltering: h.exclusiveFiltering,
-		traceIDKey:         h.traceIDKey,
-		filterTraceID:      h.filterTraceID,
-	}
-}
-
-func (h *FilterHandler) WithGroup(name string) slog.Handler {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return &FilterHandler{
-		inner:              h.inner.WithGroup(name),
-		defaultLevel:       h.defaultLevel,
-		minLevel:           h.minLevel,
-		matcher:            h.matcher,
-		disabled:           h.disabled,
-		exclusiveFiltering: h.exclusiveFiltering,
-		traceIDKey:         h.traceIDKey,
-		filterTraceID:      h.filterTraceID,
-	}
-}
-
-// pathMatcher uses a sorted slice for binary search prefix matching
-// This is faster than a trie for typical use cases (< 100 rules)
-// and has better cache locality
-type pathMatcher struct {
-	rules []pathRule
-}
-
-type pathRule struct {
-	prefix string
-	level  slog.Level
-}
-
-func newPathMatcher() *pathMatcher {
-	return &pathMatcher{rules: make([]pathRule, 0, 16)}
-}
-
-func (m *pathMatcher) add(prefix string, level slog.Level) {
-	m.rules = append(m.rules, pathRule{prefix: prefix, level: level})
-	m.sortRules()
-}
-
-func (m *pathMatcher) set(prefix string, level slog.Level) {
-	for i := range m.rules {
-		if m.rules[i].prefix == prefix {
-			m.rules[i].level = level
-			return
-		}
-	}
-	m.add(prefix, level)
-}
-
-func (m *pathMatcher) remove(prefix string) {
-	for i := range m.rules {
-		if m.rules[i].prefix == prefix {
-			m.rules = append(m.rules[:i], m.rules[i+1:]...)
-			return
-		}
-	}
-}
-
-func (m *pathMatcher) sortRules() {
-	sort.Slice(m.rules, func(i, j int) bool {
-		if len(m.rules[i].prefix) != len(m.rules[j].prefix) {
-			return len(m.rules[i].prefix) > len(m.rules[j].prefix)
-		}
-		return m.rules[i].prefix < m.rules[j].prefix
-	})
-}
-
-func (m *pathMatcher) match(path string) (slog.Level, bool) {
-	// Linear scan through sorted rules (longest first)
-	// For typical rule counts (< 50), this beats more complex structures
-	for i := range m.rules {
-		if strings.HasPrefix(path, m.rules[i].prefix) {
-			return m.rules[i].level, true
-		}
-	}
-	return 0, false
-}
-
-func (m *pathMatcher) levels() []slog.Level {
-	levels := make([]slog.Level, len(m.rules))
-	for i := range m.rules {
-		levels[i] = m.rules[i].level
-	}
-	return levels
+func newID() string {
+	var b [16]byte
+	ms := uint64(time.Now().UnixMilli())
+	b[0] = byte(ms >> 40)
+	b[1] = byte(ms >> 32)
+	b[2] = byte(ms >> 24)
+	b[3] = byte(ms >> 16)
+	b[4] = byte(ms >> 8)
+	b[5] = byte(ms)
+	_, _ = rand.Read(b[6:])
+	return strings.ToLower(idEncoding.EncodeToString(b[:]))
 }

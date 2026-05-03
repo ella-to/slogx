@@ -1,0 +1,1111 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>slogx</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #161a22;
+      --panel-2: #1d2330;
+      --border: #252c3a;
+      --text: #e6e8ef;
+      --muted: #8a93a6;
+      --accent: #6ea8ff;
+      --accent-2: #8a7dff;
+      --ok: #4ade80;
+      --warn: #facc15;
+      --err: #f87171;
+      --debug: #94a3b8;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f7f8fb;
+        --panel: #ffffff;
+        --panel-2: #f0f2f7;
+        --border: #e2e6ee;
+        --text: #1a1d25;
+        --muted: #5b6374;
+        --accent: #2962ff;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      font-size: 13px;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+
+    header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0;
+      letter-spacing: 0.3px;
+    }
+
+    header h1 .dot {
+      color: var(--accent);
+    }
+
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-left: 16px;
+    }
+
+    .tab {
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      color: var(--muted);
+      border: 1px solid transparent;
+    }
+
+    .tab.active {
+      color: var(--text);
+      background: var(--panel-2);
+      border-color: var(--border);
+    }
+
+    .spacer {
+      flex: 1;
+    }
+
+    .control {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .control input[type=checkbox] {
+      accent-color: var(--accent);
+    }
+
+    .search {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 6px 10px;
+      width: 260px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      height: calc(100vh - 49px);
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--border);
+      background: var(--panel);
+      overflow-y: auto;
+    }
+
+    .sidebar .section-title {
+      padding: 8px 12px;
+      font-size: 11px;
+      text-transform: uppercase;
+      color: var(--muted);
+      letter-spacing: 0.6px;
+    }
+
+    .trace {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      display: block;
+    }
+
+    .trace:hover {
+      background: var(--panel-2);
+    }
+
+    .trace.selected {
+      background: var(--panel-2);
+      border-left: 2px solid var(--accent);
+    }
+
+    .trace .tid {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .trace .msg {
+      margin-top: 4px;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .trace .meta {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .content {
+      overflow: auto;
+      padding: 12px 16px;
+    }
+
+    .empty {
+      color: var(--muted);
+      text-align: center;
+      margin-top: 80px;
+      font-size: 13px;
+    }
+
+    .level {
+      display: inline-block;
+      min-width: 48px;
+      text-align: center;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #0d0f14;
+    }
+
+    .level.DEBUG {
+      background: var(--debug);
+    }
+
+    .level.INFO {
+      background: var(--ok);
+    }
+
+    .level.WARN {
+      background: var(--warn);
+    }
+
+    .level.ERROR {
+      background: var(--err);
+    }
+
+    .level.pill {
+      background: var(--panel-2);
+      color: var(--muted);
+    }
+
+    .tree {
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .node {
+      position: relative;
+      margin-left: 14px;
+      padding-left: 14px;
+      border-left: 1px dashed var(--border);
+    }
+
+    .node>.node-head {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 4px 0;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .node>.node-head:hover {
+      color: var(--text);
+    }
+
+    .node>.node-head .caret {
+      width: 10px;
+      display: inline-block;
+      transition: transform 0.1s;
+    }
+
+    .node.collapsed>.node-head .caret {
+      transform: rotate(-90deg);
+    }
+
+    .node.collapsed>.node-body {
+      display: none;
+    }
+
+    .node .span-id {
+      color: var(--accent-2);
+    }
+
+    .node .count {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .chip {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: var(--accent);
+      color: #0d0f14;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+    }
+
+    .chip.go {
+      background: #22c55e;
+    }
+
+    .record {
+      display: grid;
+      grid-template-columns: 90px 56px 1fr;
+      gap: 8px;
+      padding: 3px 0;
+      align-items: start;
+      border-bottom: 1px dotted var(--border);
+      cursor: pointer;
+    }
+
+    .record:hover {
+      background: var(--panel-2);
+    }
+
+    .record.open {
+      background: var(--panel-2);
+    }
+
+    .record .time {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .record .msg {
+      word-break: break-word;
+    }
+
+    .record .attrs {
+      grid-column: 1 / -1;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      padding: 6px 10px;
+      background: var(--bg);
+      border-radius: 6px;
+      margin-top: 4px;
+      white-space: pre-wrap;
+      display: none;
+    }
+
+    .record.open .attrs {
+      display: block;
+    }
+
+    .filter-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+      max-width: 820px;
+    }
+
+    .filter-card h3 {
+      margin: 0 0 4px 0;
+      font-size: 14px;
+    }
+
+    .filter-card .hint {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+
+    .global-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .global-row label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .pattern-row {
+      display: grid;
+      grid-template-columns: 1fr 130px 80px;
+      gap: 10px;
+      align-items: center;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border-bottom: 1px dotted var(--border);
+    }
+
+    .pattern-row:hover {
+      background: var(--panel-2);
+    }
+
+    .pattern-row .pat {
+      font-family: var(--mono);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pattern-row .remove {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+
+    .pattern-row .remove:hover {
+      color: var(--err);
+      border-color: var(--err);
+    }
+
+    .level-select {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .pattern-add {
+      display: grid;
+      grid-template-columns: 1fr 130px 80px;
+      gap: 10px;
+      margin-top: 12px;
+      padding: 6px 8px;
+    }
+
+    .pattern-add input {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .pattern-add button {
+      background: var(--accent);
+      color: #0d0f14;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 12px;
+    }
+
+    .pattern-add button:hover {
+      filter: brightness(1.08);
+    }
+
+    .level-badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--panel-2);
+      color: var(--muted);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1><span class="dot">&#9679;</span> slogx</h1>
+    <div class="tabs">
+      <div class="tab active" data-tab="logs">Logs</div>
+      <div class="tab" data-tab="levels">Levels</div>
+    </div>
+    <div class="spacer"></div>
+    <input id="search" class="search" placeholder="filter logs / messages / packages" />
+    <label class="control"><input id="live" type="checkbox" checked /> Live</label>
+  </header>
+
+  <main id="logs-view">
+    <aside class="sidebar">
+      <div class="section-title">Traces</div>
+      <div id="traces"></div>
+    </aside>
+    <section class="content" id="logs-pane">
+      <div class="logs-toolbar hidden" id="logs-toolbar">
+        <button type="button" id="copy-logs" title="Copy currently visible logs as plain text">Copy logs</button>
+        <span class="status" id="copy-status"></span>
+      </div>
+      <div id="logs">
+        <div class="empty">Pick a trace on the left to see its log hierarchy.</div>
+      </div>
+    </section>
+  </main>
+
+  <main id="levels-view" class="hidden" style="grid-template-columns: 1fr;">
+    <section class="content">
+      <div class="filter-card">
+        <h3>Global level</h3>
+        <div class="hint">Applies to every package that does not have an explicit override below. Set to <b>OFF</b> to
+          default-silence everything.</div>
+        <div class="global-row">
+          <label for="global-level">Level</label>
+          <select id="global-level" class="level-select"></select>
+        </div>
+      </div>
+      <div class="filter-card">
+        <h3>Per-package overrides</h3>
+        <div class="hint">Longest matching prefix wins. Pattern matches a package name or any sub-package (<span
+            style="font-family: var(--mono)">ella.to/app</span> covers <span
+            style="font-family: var(--mono)">ella.to/app/api</span>).</div>
+        <div id="package-levels"></div>
+        <div class="pattern-add">
+          <input id="pkg-input" placeholder="ella.to/app/api" />
+          <select id="pkg-level" class="level-select"></select>
+          <button id="pkg-add">Add</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      // slog.Level serializes as a string like "DEBUG", "INFO", "WARN", "ERROR"
+      // (optionally with an offset suffix like "INFO+1"). Normalize to one of the
+      // four canonical names for UI display.
+      const NUMERIC_LEVELS = {
+        [-4]: 'DEBUG',
+        [0]: 'INFO',
+        [4]: 'WARN',
+        [8]: 'ERROR',
+      };
+      function levelName(lv) {
+        if (typeof lv === 'number') {
+          return NUMERIC_LEVELS[lv] ?? (lv < 0 ? 'DEBUG' : lv < 4 ? 'INFO' : lv < 8 ? 'WARN' : 'ERROR');
+        }
+        if (typeof lv === 'string') {
+          const base = lv.replace(/[+-]\d+$/, '').toUpperCase();
+          if (base === 'DEBUG' || base === 'INFO' || base === 'WARN' || base === 'ERROR') return base;
+        }
+        return 'INFO';
+      }
+
+      const UI_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+
+      const state = {
+        traces: [],
+        selectedTrace: null,
+        logs: [],
+        search: '',
+        live: true,
+        tab: 'logs',
+        collapsed: new Set(),
+        levelFilter: new Set(UI_LEVELS),
+        expanded: new Set(),
+      };
+
+      const $ = (id) => document.getElementById(id);
+
+      const LEVEL_NAMES = ['OFF', 'ERROR', 'WARN', 'INFO', 'DEBUG'];
+
+      // Stable identifier for a record so its expanded/collapsed state survives
+      // live re-renders. Time strings include nanoseconds so they're effectively
+      // unique per record; we still mix in span path + message defensively.
+      function recordKey(r) {
+        return (r.time || '') + '|' + (r.spanPath || '') + '|' + (r.message || '');
+      }
+
+      // ---- URL state ----
+      function readURLState() {
+        const sp = new URLSearchParams(window.location.search);
+        const q = sp.get('q');
+        if (q) state.search = q;
+        const trace = sp.get('trace');
+        if (trace) state.selectedTrace = trace;
+        const levels = sp.get('levels');
+        if (levels !== null) {
+          const wanted = levels.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+          const valid = wanted.filter(l => UI_LEVELS.includes(l));
+          state.levelFilter = new Set(valid.length ? valid : UI_LEVELS);
+        }
+      }
+
+      let urlSyncTimer = null;
+      function syncURL() {
+        if (urlSyncTimer) return;
+        urlSyncTimer = setTimeout(() => {
+          urlSyncTimer = null;
+          const sp = new URLSearchParams();
+          if (state.search) sp.set('q', state.search);
+          if (state.selectedTrace) sp.set('trace', state.selectedTrace);
+          if (state.levelFilter.size !== UI_LEVELS.length) {
+            sp.set('levels', UI_LEVELS.filter(l => state.levelFilter.has(l)).join(','));
+          }
+          const qs = sp.toString();
+          const url = window.location.pathname + (qs ? '?' + qs : '') + window.location.hash;
+          window.history.replaceState(null, '', url);
+        }, 80);
+      }
+
+      // ---- routing between tabs ----
+      document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
+        state.tab = t.dataset.tab;
+        $('logs-view').classList.toggle('hidden', state.tab !== 'logs');
+        $('levels-view').classList.toggle('hidden', state.tab !== 'levels');
+        if (state.tab === 'levels') loadLevels();
+      }));
+
+      $('search').addEventListener('input', (e) => {
+        state.search = e.target.value.trim().toLowerCase();
+        syncURL();
+        renderLogs();
+      });
+      $('live').addEventListener('change', (e) => { state.live = e.target.checked; });
+
+      // ---- Level filter dropdown ----
+      function renderLevelFilterMenu() {
+        const menu = $('lvl-filter-menu');
+        menu.innerHTML = '';
+        for (const lvl of UI_LEVELS) {
+          const lab = document.createElement('label');
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = state.levelFilter.has(lvl);
+          cb.addEventListener('change', () => {
+            if (cb.checked) state.levelFilter.add(lvl);
+            else state.levelFilter.delete(lvl);
+            updateLevelFilterCount();
+            syncURL();
+            renderLogs();
+          });
+          const badge = document.createElement('span');
+          badge.className = 'level ' + lvl;
+          badge.textContent = lvl;
+          lab.append(cb, badge);
+          menu.appendChild(lab);
+        }
+        updateLevelFilterCount();
+      }
+      function updateLevelFilterCount() {
+        $('lvl-filter-count').textContent = state.levelFilter.size + '/' + UI_LEVELS.length;
+      }
+      $('lvl-filter-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        $('lvl-filter-menu').classList.toggle('hidden');
+      });
+      document.addEventListener('click', (e) => {
+        const f = $('lvl-filter');
+        if (!f.contains(e.target)) $('lvl-filter-menu').classList.add('hidden');
+      });
+
+      // ---- API ----
+      async function api(path, opts) {
+        const r = await fetch(path, opts);
+        if (!r.ok) throw new Error(await r.text());
+        return r.headers.get('content-type')?.includes('json') ? r.json() : r.text();
+      }
+
+      async function loadTraces() {
+        try {
+          const traces = await api('traces?limit=200');
+          state.traces = traces || [];
+          renderTraces();
+        } catch (e) { console.error(e); }
+      }
+
+      async function loadLogs(traceId) {
+        try {
+          const logs = await api('logs?traceId=' + encodeURIComponent(traceId) + '&limit=5000');
+          state.logs = logs || [];
+          renderLogs();
+        } catch (e) { console.error(e); }
+      }
+
+      function makeLevelSelect(current) {
+        const sel = document.createElement('select');
+        sel.className = 'level-select';
+        for (const name of LEVEL_NAMES) {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          if (name === current) opt.selected = true;
+          sel.appendChild(opt);
+        }
+        return sel;
+      }
+
+      async function loadLevels() {
+        try {
+          const data = await api('levels');
+          renderLevels(data);
+        } catch (e) { console.error(e); }
+      }
+
+      async function patchLevels(body) {
+        try {
+          const data = await api('levels', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          renderLevels(data);
+        } catch (e) { console.error(e); }
+      }
+
+      function renderLevels(data) {
+        // Global select
+        const globalHost = $('global-level');
+        globalHost.innerHTML = '';
+        for (const name of LEVEL_NAMES) {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          if (name === (data.global || 'INFO')) opt.selected = true;
+          globalHost.appendChild(opt);
+        }
+        globalHost.onchange = () => patchLevels({ global: globalHost.value });
+
+        // Per-package overrides
+        const host = $('package-levels');
+        host.innerHTML = '';
+        const pkgs = data.packages || [];
+        if (pkgs.length === 0) {
+          const d = document.createElement('div');
+          d.className = 'hint';
+          d.style.padding = '4px 8px';
+          d.textContent = '(no package overrides)';
+          host.appendChild(d);
+        } else {
+          for (const p of pkgs) {
+            const row = document.createElement('div');
+            row.className = 'pattern-row';
+            const pat = document.createElement('span');
+            pat.className = 'pat';
+            pat.textContent = p.package;
+            const sel = makeLevelSelect(p.level);
+            sel.addEventListener('change', () =>
+              patchLevels({ set: { [p.package]: sel.value } }));
+            const btn = document.createElement('button');
+            btn.className = 'remove';
+            btn.textContent = 'remove';
+            btn.addEventListener('click', () => patchLevels({ unset: [p.package] }));
+            row.append(pat, sel, btn);
+            host.appendChild(row);
+          }
+        }
+
+        // Add row: level select once, reset on refresh
+        const lvlSel = $('pkg-level');
+        if (lvlSel.options.length === 0) {
+          for (const name of LEVEL_NAMES) {
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            if (name === 'DEBUG') opt.selected = true;
+            lvlSel.appendChild(opt);
+          }
+        }
+      }
+
+      $('pkg-add').addEventListener('click', () => {
+        const pkg = $('pkg-input').value.trim();
+        const lvl = $('pkg-level').value;
+        if (!pkg) return;
+        $('pkg-input').value = '';
+        patchLevels({ set: { [pkg]: lvl } });
+      });
+
+      // ---- rendering ----
+      function renderTraces() {
+        const host = $('traces');
+        host.innerHTML = '';
+        if (!state.traces.length) {
+          const d = document.createElement('div');
+          d.className = 'empty';
+          d.style.margin = '32px 8px';
+          d.textContent = 'No traces yet. Make a request.';
+          host.appendChild(d);
+          return;
+        }
+        for (const t of state.traces) {
+          const el = document.createElement('div');
+          el.className = 'trace' + (t.traceId === state.selectedTrace ? ' selected' : '');
+          el.addEventListener('click', () => {
+            state.selectedTrace = t.traceId;
+            state.expanded.clear();
+            syncURL();
+            renderTraces();
+            loadLogs(t.traceId);
+          });
+          const lvl = levelName(t.maxLevel);
+          el.innerHTML =
+            '<div class="tid">' + escapeHTML(t.traceId) + '</div>' +
+            '<div class="msg">' + escapeHTML(t.rootMessage || '(no messages)') + '</div>' +
+            '<div class="meta">' +
+            '<span class="level ' + lvl + '">' + lvl + '</span>' +
+            '<span>' + t.count + ' recs</span>' +
+            '<span>' + formatTime(t.lastTime) + '</span>' +
+            '</div>';
+          host.appendChild(el);
+        }
+      }
+
+      // Build a tree of nodes keyed by spanPath.
+      function buildTree(records) {
+        // Root is a synthetic node.
+        const root = { id: '', label: 'trace', children: new Map(), records: [] };
+        for (const r of records) {
+          const path = (r.spanPath || r.parentId || '').split('/').filter(Boolean);
+          let node = root;
+          for (let i = 0; i < path.length; i++) {
+            const seg = path[i];
+            let child = node.children.get(seg);
+            if (!child) {
+              child = { id: seg, label: seg, children: new Map(), records: [] };
+              node.children.set(seg, child);
+            }
+            node = child;
+          }
+          node.records.push(r);
+        }
+        return root;
+      }
+
+      function renderLogs() {
+        const host = $('logs');
+        const toolbar = $('logs-toolbar');
+        host.innerHTML = '';
+        if (!state.selectedTrace) {
+          toolbar.classList.add('hidden');
+          host.innerHTML = '<div class="empty">Pick a trace on the left to see its log hierarchy.</div>';
+          return;
+        }
+        const filtered = state.logs.filter(matchesFilters);
+        if (!filtered.length) {
+          toolbar.classList.remove('hidden');
+          host.innerHTML = '<div class="empty">No logs match.</div>';
+          return;
+        }
+        toolbar.classList.remove('hidden');
+        const tree = buildTree(filtered);
+        const container = document.createElement('div');
+        container.className = 'tree';
+        const roots = [...tree.children.values()]
+          .sort((a, b) => earliestTime(a) - earliestTime(b));
+        for (const child of roots) {
+          container.appendChild(renderNode(child, 0));
+        }
+        host.appendChild(container);
+      }
+
+      function renderNode(node, depth) {
+        const el = document.createElement('div');
+        el.className = 'node' + (state.collapsed.has(node.id) ? ' collapsed' : '');
+
+        const total = countRecords(node);
+        const goChip = hasConcurrent(node) ? '<span class="chip go" title="emitted from a goroutine">go</span>' : '';
+        const head = document.createElement('div');
+        head.className = 'node-head';
+        head.innerHTML =
+          '<span class="caret">&#9662;</span>' +
+          '<span class="span-id">' + escapeHTML(node.label) + '</span>' +
+          goChip +
+          '<span class="count">' + total + ' recs</span>';
+        head.addEventListener('click', () => {
+          if (state.collapsed.has(node.id)) state.collapsed.delete(node.id);
+          else state.collapsed.add(node.id);
+          el.classList.toggle('collapsed');
+        });
+        el.appendChild(head);
+
+        const body = document.createElement('div');
+        body.className = 'node-body';
+
+        // Interleave this span's own records with its child subtrees, ordered by
+        // time. A child subtree's time is the earliest record time in its
+        // transitive closure.
+        const items = [];
+        for (const r of node.records) {
+          items.push({ t: +new Date(r.time), kind: 'record', data: r });
+        }
+        for (const child of node.children.values()) {
+          items.push({ t: earliestTime(child), kind: 'child', data: child });
+        }
+        items.sort((a, b) => a.t - b.t);
+
+        for (const it of items) {
+          if (it.kind === 'record') body.appendChild(renderRecord(it.data));
+          else body.appendChild(renderNode(it.data, depth + 1));
+        }
+        el.appendChild(body);
+        return el;
+      }
+
+      function countRecords(node) {
+        let c = node.records.length;
+        for (const ch of node.children.values()) c += countRecords(ch);
+        return c;
+      }
+
+      function earliestTime(node) {
+        let min = Infinity;
+        for (const r of node.records) {
+          const t = +new Date(r.time);
+          if (t < min) min = t;
+        }
+        for (const ch of node.children.values()) {
+          const t = earliestTime(ch);
+          if (t < min) min = t;
+        }
+        return min;
+      }
+
+      function hasConcurrent(node) {
+        for (const r of node.records) if (r.concurrent) return true;
+        for (const ch of node.children.values()) if (hasConcurrent(ch)) return true;
+        return false;
+      }
+
+      // Render an attribute value: primitives show as-is; objects/arrays as JSON.
+      function formatAttrValue(v) {
+        if (v === null) return 'null';
+        if (typeof v === 'string') return v;
+        if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+        try {
+          return JSON.stringify(v, null, 2);
+        } catch (e) {
+          return String(v);
+        }
+      }
+
+      function renderRecord(r) {
+        const el = document.createElement('div');
+        el.className = 'record';
+        const key = recordKey(r);
+        el.dataset.key = key;
+        if (state.expanded.has(key)) el.classList.add('open');
+
+        const lvl = levelName(r.level);
+        const goMark = r.concurrent ? ' <span class="chip go" title="emitted from a goroutine">go</span>' : '';
+
+        const head =
+          '<span class="time">' + formatTime(r.time) + '</span>' +
+          '<span class="level ' + lvl + '">' + lvl + '</span>' +
+          '<span class="msg">' + escapeHTML(r.message) + goMark +
+          (r.source ? ' <span style="color: var(--muted)">' + escapeHTML(r.source) + '</span>' : '') +
+          '</span>';
+
+        const attrs = r.attrs || {};
+        const attrKeys = Object.keys(attrs);
+        let attrsHTML;
+        if (attrKeys.length === 0) {
+          attrsHTML = '<div class="attrs"><span class="empty-attrs">(no attrs)</span></div>';
+        } else {
+          let body = '';
+          for (const k of attrKeys) {
+            body += '<div class="kv">' +
+              '<span class="k">' + escapeHTML(k) + '</span>' +
+              '<span>: </span>' +
+              '<span class="v">' + escapeHTML(formatAttrValue(attrs[k])) + '</span>' +
+              '</div>';
+          }
+          attrsHTML = '<div class="attrs">' + body + '</div>';
+        }
+
+        el.innerHTML = head + attrsHTML;
+        el.addEventListener('click', (e) => {
+          if (e.target.tagName === 'A') return;
+          const opened = el.classList.toggle('open');
+          if (opened) state.expanded.add(key);
+          else state.expanded.delete(key);
+        });
+        return el;
+      }
+
+      function matchesFilters(r) {
+        if (!state.levelFilter.has(levelName(r.level))) return false;
+        if (!state.search) return true;
+        const q = state.search;
+        if ((r.message || '').toLowerCase().includes(q)) return true;
+        if ((r.package || '').toLowerCase().includes(q)) return true;
+        if ((r.source || '').toLowerCase().includes(q)) return true;
+        for (const [k, v] of Object.entries(r.attrs || {})) {
+          if (k.toLowerCase().includes(q)) return true;
+          if (String(v).toLowerCase().includes(q)) return true;
+        }
+        return false;
+      }
+
+      function formatTime(t) {
+        if (!t) return '';
+        const d = new Date(t);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        const ms = String(d.getMilliseconds()).padStart(3, '0');
+        return hh + ':' + mm + ':' + ss + '.' + ms;
+      }
+
+      function escapeHTML(s) {
+        return String(s ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      // ---- copy logs ----
+      function buildCopyText() {
+        const lines = [];
+        const filtered = state.logs.filter(matchesFilters);
+        if (!filtered.length) return '';
+        const tree = buildTree(filtered);
+        const roots = [...tree.children.values()]
+          .sort((a, b) => earliestTime(a) - earliestTime(b));
+        for (const child of roots) appendNodeText(child, 0, lines);
+        return lines.join('\n');
+      }
+
+      function appendNodeText(node, depth, out) {
+        const indent = '  '.repeat(depth);
+        out.push(indent + '[' + node.label + ']');
+        const items = [];
+        for (const r of node.records) items.push({ t: +new Date(r.time), kind: 'record', data: r });
+        for (const ch of node.children.values()) items.push({ t: earliestTime(ch), kind: 'child', data: ch });
+        items.sort((a, b) => a.t - b.t);
+        for (const it of items) {
+          if (it.kind === 'record') appendRecordText(it.data, depth + 1, out);
+          else appendNodeText(it.data, depth + 1, out);
+        }
+      }
+
+      function appendRecordText(r, depth, out) {
+        const indent = '  '.repeat(depth);
+        const lvl = levelName(r.level);
+        const src = r.source ? ' (' + r.source + ')' : '';
+        out.push(indent + formatTime(r.time) + ' ' + lvl.padEnd(5) + ' ' + (r.message || '') + src);
+        const attrs = r.attrs || {};
+        const inner = indent + '    ';
+        for (const k of Object.keys(attrs)) {
+          const val = formatAttrValue(attrs[k]);
+          const valLines = val.split('\n');
+          out.push(inner + k + ': ' + valLines[0]);
+          for (let i = 1; i < valLines.length; i++) out.push(inner + '  ' + valLines[i]);
+        }
+      }
+
+      $('copy-logs').addEventListener('click', async () => {
+        const text = buildCopyText();
+        if (!text) {
+          flashCopyStatus('Nothing to copy');
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(text);
+          flashCopyStatus('Copied ' + text.split('\n').length + ' lines');
+        } catch (e) {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); flashCopyStatus('Copied'); }
+          catch (_) { flashCopyStatus('Copy failed'); }
+          document.body.removeChild(ta);
+        }
+      });
+
+      let copyStatusTimer = null;
+      function flashCopyStatus(msg) {
+        const el = $('copy-status');
+        el.textContent = msg;
+        if (copyStatusTimer) clearTimeout(copyStatusTimer);
+        copyStatusTimer = setTimeout(() => { el.textContent = ''; }, 1500);
+      }
+
+      // ---- polling loop ----
+      async function tick() {
+        if (state.tab === 'logs' && state.live) {
+          await loadTraces();
+          if (state.selectedTrace) await loadLogs(state.selectedTrace);
+        }
+      }
+
+      // ---- bootstrap ----
+      readURLState();
+      $('search').value = state.search;
+      renderLevelFilterMenu();
+      (async () => {
+        await loadTraces();
+        if (state.selectedTrace) {
+          // If the trace from URL no longer exists in the list it's still fine
+          // to query its logs; the server will just return an empty list.
+          renderTraces();
+          await loadLogs(state.selectedTrace);
+        }
+      })();
+      setInterval(tick, 2000);
+
+      // keyboard
+      document.addEventListener('keydown', (e) => {
+        if (e.key === '/' && document.activeElement !== $('search')) {
+          e.preventDefault();
+          $('search').focus();
+        }
+      });
+    })();
+  </script>
+</body>
+
+</html>
