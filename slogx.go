@@ -171,6 +171,26 @@ const (
 	spanDetailPathKey // pipe-joined detail strings, e.g. "pkg.Open:file.go:10|pkg.Prepare:file.go:42"
 )
 
+// ContextOption configures the behaviour of a Context call.
+type ContextOption func(*contextOpts)
+
+type contextOpts struct {
+	extraSkip int
+}
+
+// WithWrapFunc tells Context that it is being called from inside a helper /
+// wrapper function (e.g. event.Context, SlogxPropagator.Inject) that should
+// itself be transparent to the span name. Each call to WithWrapFunc adds one
+// extra frame to skip when resolving the caller name, so the recorded span
+// points at the real application function rather than the helper.
+//
+// Example – inside bus.Event.Context:
+//
+//	return slogx.Context(ctx, slogx.WithWrapFunc())
+func WithWrapFunc() ContextOption {
+	return func(o *contextOpts) { o.extraSkip++ }
+}
+
 // Context returns a derived context that starts a new span. On the first call
 // (no trace-id in ctx) a new trace-id is also generated. The returned context
 // carries:
@@ -184,7 +204,17 @@ const (
 // Use at the start of any function that accepts ctx:
 //
 //	ctx = slogx.Context(ctx)
-func Context(ctx context.Context) context.Context {
+//
+// When calling from inside a helper that should be invisible in the span
+// name, pass WithWrapFunc() for each wrapper layer:
+//
+//	ctx = slogx.Context(ctx, slogx.WithWrapFunc())
+func Context(ctx context.Context, opts ...ContextOption) context.Context {
+	o := contextOpts{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -196,8 +226,9 @@ func Context(ctx context.Context) context.Context {
 
 	spanID := newID()
 
-	// Capture caller info (skip=1: caller of Context).
-	spanName, spanDetail := callerInfo(1)
+	// Capture caller info. skip=1 resolves to the direct caller of Context.
+	// Each WithWrapFunc() adds one more frame to skip past wrapper helpers.
+	spanName, spanDetail := callerInfo(1 + o.extraSkip)
 
 	prevPath, _ := ctx.Value(spanPathKey).(string)
 	var newPath string
