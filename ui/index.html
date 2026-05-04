@@ -460,6 +460,56 @@
     .hidden {
       display: none !important;
     }
+
+    #lvl-filter {
+      position: relative;
+    }
+
+    #lvl-filter-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 6px;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    #lvl-filter-btn:hover {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+
+    #lvl-filter-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 4px);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      z-index: 100;
+      min-width: 120px;
+    }
+
+    #lvl-filter-menu label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      padding: 3px 4px;
+      border-radius: 4px;
+    }
+
+    #lvl-filter-menu label:hover {
+      background: var(--panel-2);
+    }
   </style>
 </head>
 
@@ -472,6 +522,10 @@
     </div>
     <div class="spacer"></div>
     <input id="search" class="search" placeholder="filter logs / messages / packages" />
+    <div id="lvl-filter">
+      <button type="button" id="lvl-filter-btn">Levels <span id="lvl-filter-count"></span></button>
+      <div id="lvl-filter-menu" class="hidden"></div>
+    </div>
     <label class="control"><input id="live" type="checkbox" checked /> Live</label>
   </header>
 
