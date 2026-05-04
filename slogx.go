@@ -176,6 +176,7 @@ type ContextOption func(*contextOpts)
 
 type contextOpts struct {
 	extraSkip int
+	funcName  string
 }
 
 // WithWrapFunc tells Context that it is being called from inside a helper /
@@ -189,6 +190,19 @@ type contextOpts struct {
 //	return slogx.Context(ctx, slogx.WithWrapFunc())
 func WithWrapFunc() ContextOption {
 	return func(o *contextOpts) { o.extraSkip++ }
+}
+
+// WithFuncName overrides the function name that would otherwise be captured
+// from the call stack. Use this to give a meaningful name to anonymous
+// functions (closures) or generated code where the runtime name would be
+// something like "func1" or "handleX.func2":
+//
+//	go func() {
+//	    ctx = slogx.Context(ctx, slogx.WithFuncName("processOrder"))
+//	    // ...
+//	}()
+func WithFuncName(name string) ContextOption {
+	return func(o *contextOpts) { o.funcName = name }
 }
 
 // Context returns a derived context that starts a new span. On the first call
@@ -229,6 +243,17 @@ func Context(ctx context.Context, opts ...ContextOption) context.Context {
 	// Capture caller info. skip=1 resolves to the direct caller of Context.
 	// Each WithWrapFunc() adds one more frame to skip past wrapper helpers.
 	spanName, spanDetail := callerInfo(1 + o.extraSkip)
+	if o.funcName != "" {
+		// Replace only the short name portion; keep the file:line suffix from
+		// spanDetail so the source location remains accurate.
+		spanName = o.funcName
+		if i := strings.LastIndex(spanDetail, ":"); i >= 0 {
+			if j := strings.LastIndex(spanDetail[:i], ":"); j >= 0 {
+				// spanDetail is "pkg.funcName:file.go:line" – replace up to first colon
+				spanDetail = o.funcName + spanDetail[strings.Index(spanDetail, ":"):]
+			}
+		}
+	}
 
 	prevPath, _ := ctx.Value(spanPathKey).(string)
 	var newPath string
