@@ -31,6 +31,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -163,8 +165,10 @@ const (
 	traceIDKey ctxKey = iota
 	spanIDKey
 	spanPathKey
-	birthGIDKey   // goroutine id recorded at the span's creation
-	concurrentKey // true if this span (or any ancestor) was created on a different goroutine than its parent
+	birthGIDKey       // goroutine id recorded at the span's creation
+	concurrentKey     // true if this span (or any ancestor) was created on a different goroutine than its parent
+	spanNamePathKey   // slash-joined short caller names, e.g. "Open/Prepare"
+	spanDetailPathKey // pipe-joined detail strings, e.g. "pkg.Open:file.go:10|pkg.Prepare:file.go:42"
 )
 
 // Context returns a derived context that starts a new span. On the first call
@@ -192,12 +196,31 @@ func Context(ctx context.Context) context.Context {
 
 	spanID := newID()
 
+	// Capture caller info (skip=1: caller of Context).
+	spanName, spanDetail := callerInfo(1)
+
 	prevPath, _ := ctx.Value(spanPathKey).(string)
 	var newPath string
 	if prevPath == "" {
 		newPath = spanID
 	} else {
 		newPath = prevPath + "/" + spanID
+	}
+
+	prevNamePath, _ := ctx.Value(spanNamePathKey).(string)
+	var newNamePath string
+	if prevNamePath == "" {
+		newNamePath = spanName
+	} else {
+		newNamePath = prevNamePath + "/" + spanName
+	}
+
+	prevDetailPath, _ := ctx.Value(spanDetailPathKey).(string)
+	var newDetailPath string
+	if prevDetailPath == "" {
+		newDetailPath = spanDetail
+	} else {
+		newDetailPath = prevDetailPath + "|" + spanDetail
 	}
 
 	curGID := goid()
@@ -208,11 +231,37 @@ func Context(ctx context.Context) context.Context {
 
 	ctx = context.WithValue(ctx, spanIDKey, spanID)
 	ctx = context.WithValue(ctx, spanPathKey, newPath)
+	ctx = context.WithValue(ctx, spanNamePathKey, newNamePath)
+	ctx = context.WithValue(ctx, spanDetailPathKey, newDetailPath)
 	ctx = context.WithValue(ctx, birthGIDKey, curGID)
 	if concurrent {
 		ctx = context.WithValue(ctx, concurrentKey, true)
 	}
 	return ctx
+}
+
+// callerInfo returns the short function/method name and a detail string for
+// the function skip frames above callerInfo's own caller. skip=1 means the
+// direct caller of callerInfo (i.e. the caller of Context).
+func callerInfo(skip int) (shortName, detail string) {
+	pc, file, line, ok := runtime.Caller(skip + 1)
+	if !ok {
+		return "?", ""
+	}
+	fn := runtime.FuncForPC(pc)
+	if fn == nil {
+		return "?", ""
+	}
+	fullName := fn.Name()
+	// shortName: everything after the last dot, e.g.:
+	//   "ella.to/sqlite.(*Conn).Prepare" → "Prepare"
+	//   "main.handleSum"                 → "handleSum"
+	shortName = fullName
+	if i := strings.LastIndex(fullName, "."); i >= 0 {
+		shortName = fullName[i+1:]
+	}
+	detail = fullName + ":" + trimGoPath(file) + ":" + strconv.Itoa(line)
+	return shortName, detail
 }
 
 // Concurrent reports whether ctx belongs to a span that runs on a different
@@ -261,6 +310,26 @@ func SpanPath(ctx context.Context) string {
 		return ""
 	}
 	s, _ := ctx.Value(spanPathKey).(string)
+	return s
+}
+
+// SpanNamePath returns the slash-joined short caller names for the current
+// span ancestry, e.g. "Open/Prepare". Falls back to "" if not set.
+func SpanNamePath(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	s, _ := ctx.Value(spanNamePathKey).(string)
+	return s
+}
+
+// SpanDetailPath returns the pipe-joined detail strings (fullFuncName:file:line)
+// for each span in the current ancestry. Falls back to "" if not set.
+func SpanDetailPath(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	s, _ := ctx.Value(spanDetailPathKey).(string)
 	return s
 }
 

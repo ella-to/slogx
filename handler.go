@@ -89,6 +89,8 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	traceID := TraceID(ctx)
 	spanID := SpanID(ctx)
 	spanPath := SpanPath(ctx)
+	spanNamePath := SpanNamePath(ctx)
+	spanDetailPath := SpanDetailPath(ctx)
 	concurrent := Concurrent(ctx)
 
 	if traceID != "" {
@@ -105,7 +107,7 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	}
 
 	if h.store != nil {
-		h.store.Append(h.toRecord(r, pkg, traceID, spanID, spanPath, concurrent))
+		h.store.Append(h.toRecord(r, pkg, traceID, spanID, spanPath, spanNamePath, spanDetailPath, concurrent))
 	}
 
 	if h.sink != nil {
@@ -198,7 +200,7 @@ func resolvePackage(pc uintptr) string {
 
 // toRecord converts a slog.Record (plus ctx-derived fields) into a Record
 // suitable for the Store.
-func (h *Handler) toRecord(r slog.Record, pkg, traceID, spanID, spanPath string, concurrent bool) Record {
+func (h *Handler) toRecord(r slog.Record, pkg, traceID, spanID, spanPath, spanNamePath, spanDetailPath string, concurrent bool) Record {
 	attrs := make(map[string]any)
 	for _, pre := range h.attrs {
 		attrs[pre.Key] = attrValue(pre.Value)
@@ -227,16 +229,18 @@ func (h *Handler) toRecord(r slog.Record, pkg, traceID, spanID, spanPath string,
 	}
 
 	return Record{
-		Time:       t,
-		Level:      r.Level,
-		Message:    r.Message,
-		Source:     source,
-		Package:    pkg,
-		TraceID:    traceID,
-		ParentID:   spanID,
-		SpanPath:   spanPath,
-		Concurrent: concurrent,
-		Attrs:      attrs,
+		Time:           t,
+		Level:          r.Level,
+		Message:        r.Message,
+		Source:         source,
+		Package:        pkg,
+		TraceID:        traceID,
+		ParentID:       spanID,
+		SpanPath:       spanPath,
+		SpanNamePath:   spanNamePath,
+		SpanDetailPath: spanDetailPath,
+		Concurrent:     concurrent,
+		Attrs:          attrs,
 	}
 }
 

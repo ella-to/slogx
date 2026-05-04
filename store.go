@@ -9,16 +9,18 @@ import (
 
 // Record is the serialized form of a slog.Record as retained by a Store.
 type Record struct {
-	Time       time.Time      `json:"time"`
-	Level      slog.Level     `json:"level"`
-	Message    string         `json:"message"`
-	Source     string         `json:"source,omitempty"`
-	Package    string         `json:"package,omitempty"`
-	TraceID    string         `json:"traceId,omitempty"`
-	ParentID   string         `json:"parentId,omitempty"`
-	SpanPath   string         `json:"spanPath,omitempty"`
-	Concurrent bool           `json:"concurrent,omitempty"`
-	Attrs      map[string]any `json:"attrs,omitempty"`
+	Time           time.Time      `json:"time"`
+	Level          slog.Level     `json:"level"`
+	Message        string         `json:"message"`
+	Source         string         `json:"source,omitempty"`
+	Package        string         `json:"package,omitempty"`
+	TraceID        string         `json:"traceId,omitempty"`
+	ParentID       string         `json:"parentId,omitempty"`
+	SpanPath       string         `json:"spanPath,omitempty"`
+	SpanNamePath   string         `json:"spanNamePath,omitempty"`
+	SpanDetailPath string         `json:"spanDetailPath,omitempty"`
+	Concurrent     bool           `json:"concurrent,omitempty"`
+	Attrs          map[string]any `json:"attrs,omitempty"`
 }
 
 // Query restricts which records Query returns.
@@ -30,11 +32,11 @@ type Query struct {
 
 // TraceSummary is a lightweight aggregate used by the UI index.
 type TraceSummary struct {
-	TraceID   string    `json:"traceId"`
-	FirstTime time.Time `json:"firstTime"`
-	LastTime  time.Time `json:"lastTime"`
-	Count     int       `json:"count"`
-	RootMsg   string    `json:"rootMessage,omitempty"`
+	TraceID   string     `json:"traceId"`
+	FirstTime time.Time  `json:"firstTime"`
+	LastTime  time.Time  `json:"lastTime"`
+	Count     int        `json:"count"`
+	RootMsg   string     `json:"rootMessage,omitempty"`
 	MaxLevel  slog.Level `json:"maxLevel"`
 }
 

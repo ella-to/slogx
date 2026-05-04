@@ -270,6 +270,53 @@
       color: var(--accent-2);
     }
 
+    .span-info {
+      display: inline-flex;
+      align-items: center;
+      position: relative;
+    }
+
+    .span-info-icon {
+      display: inline-block;
+      width: 13px;
+      height: 13px;
+      line-height: 13px;
+      text-align: center;
+      font-size: 9px;
+      font-style: normal;
+      border-radius: 50%;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: default;
+      margin-left: 4px;
+      flex-shrink: 0;
+    }
+
+    .span-info-tooltip {
+      display: none;
+      position: absolute;
+      left: calc(100% + 6px);
+      top: 50%;
+      transform: translateY(-50%);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 10px;
+      white-space: pre;
+      font-size: 11px;
+      color: var(--text);
+      font-family: var(--mono);
+      z-index: 200;
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      min-width: 260px;
+    }
+
+    .span-info:hover .span-info-tooltip {
+      display: block;
+    }
+
     .node .count {
       color: var(--muted);
       font-size: 11px;
@@ -857,16 +904,22 @@
       // Build a tree of nodes keyed by spanPath.
       function buildTree(records) {
         // Root is a synthetic node.
-        const root = { id: '', label: 'trace', children: new Map(), records: [] };
+        const root = { id: '', label: 'trace', detail: '', children: new Map(), records: [] };
         for (const r of records) {
-          const path = (r.spanPath || r.parentId || '').split('/').filter(Boolean);
+          const ids = (r.spanPath || r.parentId || '').split('/').filter(Boolean);
+          const names = (r.spanNamePath || '').split('/').filter(Boolean);
+          const details = (r.spanDetailPath || '').split('|').filter(Boolean);
           let node = root;
-          for (let i = 0; i < path.length; i++) {
-            const seg = path[i];
+          for (let i = 0; i < ids.length; i++) {
+            const seg = ids[i];
+            const label = names[i] || seg;
+            const detail = details[i] || '';
             let child = node.children.get(seg);
             if (!child) {
-              child = { id: seg, label: seg, children: new Map(), records: [] };
+              child = { id: seg, label, detail, children: new Map(), records: [] };
               node.children.set(seg, child);
+            } else if (detail && !child.detail) {
+              child.detail = detail;
             }
             node = child;
           }
@@ -910,9 +963,40 @@
         const goChip = hasConcurrent(node) ? '<span class="chip go" title="emitted from a goroutine">go</span>' : '';
         const head = document.createElement('div');
         head.className = 'node-head';
+
+        // Build detail tooltip if we have caller info.
+        let infoHTML = '';
+        if (node.detail) {
+          // detail format: "pkg.FuncFull:file.go:line"
+          // Split on last ':' group to separate func from file:line
+          const parts = node.detail.split(':');
+          // parts may be: ["pkg.Func", "file.go", "42"] or
+          // ["pkg.Func", "path/to/file.go", "42"]
+          const lineNo = parts.length >= 2 ? parts[parts.length - 1] : '';
+          const filePart = parts.length >= 3 ? parts.slice(1, parts.length - 1).join(':') : '';
+          const funcFull = parts[0];
+          // Extract package from full name: everything up to last '/'+first '.'
+          let pkgPart = '';
+          let funcPart = funcFull;
+          const slashIdx = funcFull.lastIndexOf('/');
+          const dotIdx = funcFull.indexOf('.', slashIdx + 1);
+          if (dotIdx >= 0) {
+            pkgPart = funcFull.slice(0, dotIdx);
+            funcPart = funcFull.slice(dotIdx + 1);
+          }
+          const tipText = (pkgPart ? 'pkg:  ' + pkgPart + '\n' : '') +
+            'func: ' + funcPart + '\n' +
+            (filePart ? 'file: ' + filePart + ':' + lineNo : '');
+          infoHTML = '<span class="span-info">' +
+            '<span class="span-info-icon">i</span>' +
+            '<span class="span-info-tooltip">' + escapeHTML(tipText) + '</span>' +
+            '</span>';
+        }
+
         head.innerHTML =
           '<span class="caret">&#9662;</span>' +
           '<span class="span-id">' + escapeHTML(node.label) + '</span>' +
+          infoHTML +
           goChip +
           '<span class="count">' + total + ' recs</span>';
         head.addEventListener('click', () => {
