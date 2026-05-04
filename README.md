@@ -215,6 +215,108 @@ type Store interface {
 }
 ```
 
+## ella.to/jsonrpc integration
+
+`jsonrpc.NewSlogxPropagator()` (defined in `ella.to/jsonrpc`) returns a
+`*SlogxPropagator` that implements `ContextPropagator`. Since
+`ella.to/jsonrpc` already imports `ella.to/slogx`, the propagator lives in
+the jsonrpc package where `Extract` and `Inject` naturally belong.
+
+Pass it to `jsonrpc.WithContextPropagation` on **both** the client and the
+server. The propagator transparently carries the current slogx trace-id
+across the call boundary so that logs emitted inside an RPC handler appear as
+child spans of the client's trace in the slogx UI.
+
+### How it works
+
+| Transport | Client sends                                    | Server reads                                    |
+|-----------|-------------------------------------------------|-------------------------------------------------|
+| HTTP      | `X-Rpc-Meta-_traceId` request header            | Same header, stripped by jsonrpc middleware      |
+| Raw       | `{"requests":[…],"metadata":{"_traceId":"…"}}` | Metadata envelope unwrapped by jsonrpc server   |
+
+`Inject` (server side) restores the original trace-id and opens a new slogx
+span via `slogx.Context(ctx)`, so every log record from the handler inherits
+the client trace but gets its own span label.
+
+### HTTP example
+
+```go
+// ---- server ----
+package main
+
+import (
+    "context"
+    "log/slog"
+    "net/http"
+
+    "ella.to/jsonrpc"
+    "ella.to/slogx"
+)
+
+type handler struct{}
+
+func (h *handler) Handle(ctx context.Context, req *jsonrpc.Request) *jsonrpc.Response {
+    ctx = slogx.Context(ctx) // optional extra span inside the handler
+    slog.InfoContext(ctx, "handling RPC", "method", req.Method)
+    return req.CreateResponse("ok")
+}
+
+func main() {
+    slogx.Setup()
+
+    mux := http.NewServeMux()
+    mux.Handle("/_slogx/", http.StripPrefix("/_slogx", slogx.HttpHandler()))
+    mux.Handle("/rpc", jsonrpc.NewHTTPHandler(
+        &handler{},
+        jsonrpc.WithContextPropagation(jsonrpc.NewSlogxPropagator()),
+    ))
+
+    http.ListenAndServe(":8080", slogx.Middleware(mux))
+}
+
+// ---- client ----
+func callServer(ctx context.Context) {
+    ctx = slogx.Context(ctx) // establishes (or continues) a trace
+    slog.InfoContext(ctx, "about to call RPC")
+
+    client := jsonrpc.NewHTTPClient("http://localhost:8080/rpc",
+        jsonrpc.WithContextPropagation(jsonrpc.NewSlogxPropagator()),
+    )
+
+    req := &jsonrpc.Request{Method: "hello"}
+    client.Call(ctx, req)
+
+    slog.InfoContext(ctx, "RPC done")
+    // All three log records (before call, inside handler, after call)
+    // share the same trace-id and appear together in the slogx UI.
+}
+```
+
+### Raw (peer-to-peer) example
+
+```go
+// ---- server ----
+func serveRaw(conn io.ReadWriteCloser) {
+    server := jsonrpc.NewRawServer(conn, &handler{},
+        jsonrpc.WithContextPropagation(jsonrpc.NewSlogxPropagator()),
+    )
+    server.Serve(context.Background())
+}
+
+// ---- client ----
+func callRaw(ctx context.Context, conn io.ReadWriteCloser) {
+    ctx = slogx.Context(ctx)
+
+    client := jsonrpc.NewRawClient(conn,
+        jsonrpc.WithContextPropagation(jsonrpc.NewSlogxPropagator()),
+    )
+    defer client.Close()
+
+    req := &jsonrpc.Request{Method: "hello"}
+    client.Call(ctx, req)
+}
+```
+
 ## Notes / out of scope
 
 - No W3C `traceparent` propagation (only `X-TRACE-ID`).
